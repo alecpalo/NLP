@@ -1,0 +1,114 @@
+import numpy as np
+import nltk
+from sklearn.metrics.pairwise import cosine_similarity
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+from nltk.util import ngrams
+from numpy.linalg import norm
+import string
+
+# Sample text data
+document = """
+Abstract
+A coffee brewing system and method that includes a brew chamber that holds a brew solution during a brew cycle and dispenses the brew solution; a water system that dispenses water into the brew chamber; a content sensing system that measures the brew solution contents added to the brew chamber; a temperature control system with a heating element and a temperature sensor; at least one recirculating processing loop with a particle monitor system, wherein the recirculating processing loop circulates brew solution extracted from the brew chamber; and a control system that is communicatively coupled to the content sensing system, the temperature control system and the particle monitor system during a brew cycle, wherein the control system controls a brew cycle based on a selected a specified taste profile.
+
+...
+
+claims
+brews coffee in the morning.
+
+coffee.
+"""
+
+keywords = ["Has beeper to alert user when done.", "Has an electronic screen for control", "Brews coffee", "Brews milk", "Has timer function.", "Has a temperature control system."]
+
+# Load GloVe embeddings from file
+def load_glove_embeddings(file_path):
+    embeddings = {}
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            values = line.split()
+            word = values[0]
+            vector = np.asarray(values[1:], dtype='float32')
+            embeddings[word] = vector
+    return embeddings
+
+# Path to the GloVe embeddings file
+glove_file_path = 'glove/vectors.txt'  # Adjust the file path as needed
+
+# Load the embeddings
+glove_embeddings = load_glove_embeddings(glove_file_path)
+
+# Preprocess function with lemmatization
+def preprocess(text):
+    lemmatizer = WordNetLemmatizer()
+    tokens = nltk.word_tokenize(text.lower())
+    tokens = [word for word in tokens if word not in string.punctuation]
+    tokens = [word for word in tokens if word not in stopwords.words('english')]
+    tokens = [lemmatizer.lemmatize(word) for word in tokens]
+    return tokens
+
+# Generate n-grams from tokens
+def generate_ngrams(tokens, n):
+    return list(ngrams(tokens, n))
+
+# Get vector for n-gram by averaging the vectors of its constituent words
+def get_ngram_vector(ngram, embeddings):
+    vectors = [embeddings[word] for word in ngram if word in embeddings]
+    return np.mean(vectors, axis=0) if vectors else np.zeros(len(next(iter(embeddings.values()))))
+
+# Preprocess the document
+processed_doc = preprocess(document)
+
+# Generate unigrams to 6-grams
+ngrams_list = []
+for n in range(3, 7):
+    ngrams_list.extend(generate_ngrams(processed_doc, n))
+
+# Get the document vector by averaging all n-gram vectors
+doc_vectors = [get_ngram_vector(ngram, glove_embeddings) for ngram in ngrams_list]
+doc_vector = np.mean(doc_vectors, axis=0) if doc_vectors else np.zeros(len(next(iter(glove_embeddings.values()))))
+
+# Pearson Correlation function
+def pearson_correlation(vec1, vec2):
+    if np.std(vec1) == 0 or np.std(vec2) == 0:
+        return 0  # Handle zero standard deviation cases
+    return np.corrcoef(vec1, vec2)[0, 1]
+
+# Function to get relevance scores for keywords/phrases
+def get_keyword_relevance(keywords, embeddings, doc_vector):
+    relevance_scores = {}
+    for keyword in keywords:
+        processed_keyword = preprocess(keyword)
+        keyword_ngrams = []
+        for n in range(1, 7):
+            keyword_ngrams.extend(generate_ngrams(processed_keyword, n))
+        keyword_vectors = [get_ngram_vector(ngram, embeddings) for ngram in keyword_ngrams]
+        keyword_vector = np.mean(keyword_vectors, axis=0) if keyword_vectors else np.zeros(len(next(iter(embeddings.values()))))
+
+        # Calculate Cosine Similarity
+        cosine_sim = cosine_similarity([doc_vector], [keyword_vector])[0][0]
+
+        # Calculate Pearson Correlation
+        pearson_corr = pearson_correlation(doc_vector, keyword_vector)
+
+        # Combine Cosine Similarity and Pearson Correlation
+        alpha = 0.6  # Weight for cosine similarity
+        beta = 0.4  # Weight for Pearson correlation
+        hybrid_similarity = alpha * cosine_sim + beta * pearson_corr
+
+        relevance_scores[keyword] = hybrid_similarity
+    return relevance_scores
+
+# Get relevance scores for the given keywords
+relevance_scores = get_keyword_relevance(keywords, glove_embeddings, doc_vector)
+
+# Print the relevance scores
+print("Relevance scores for the given keywords/phrases:")
+for keyword, score in relevance_scores.items():
+    print(f"{keyword}: {score}")
+
+# Optional: Print the full document vector for debugging
+print("\nDocument Vector:")
+print(doc_vector)
+
